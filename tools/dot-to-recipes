@@ -5,6 +5,7 @@ import os
 import sys
 import collections
 
+skip_patterns = ["^task-", "^meta-", "-image$", "-image-"]
 regex = re.compile(r'"(?P<name>[^"]+)" \[label="(?P<label>[^"]+)"\]')
 
 try:
@@ -13,7 +14,7 @@ try:
 except IndexError:
     sys.exit("Usage: dot-to-recipes.py DOTFILE TARGET [TARGET...]")
 
-depends = collections.defaultdict(set)
+depends = collections.defaultdict(lambda: collections.defaultdict(set))
 dotfile = open(dotfile, "rU")
 for line in dotfile:
     match = re.match(regex, line)
@@ -22,26 +23,25 @@ for line in dotfile:
             src, dest = line.rstrip().replace('"', '').split(" -> ")
             srcrecipe, srctask = src.rsplit(".", 1)
             destrecipe, desttask = dest.rsplit(".", 1)
-            if desttask in ("do_populate_sysroot", "do_package_stage",
-                            "do_deploy"):
-                depends[srcrecipe].add(destrecipe)
+            depends[srcrecipe][srctask].add((destrecipe, desttask))
 
 seen = set()
-def get_depends(targets):
-    for target in targets:
-        for depend in depends[target]:
-            if depend in seen:
-                continue
-            seen.add(depend)
-            for ndepend in get_depends(depend):
-                yield ndepend
-            yield depend
+def get_tasks(target, task):
+    for depend, deptask in depends[target][task]:
+        for depend_, deptask_ in get_tasks(depend, deptask):
+            yield depend_, deptask_
 
-skip_patterns = ["^task-", "^meta-", "-image$", "-image-"]
-for i, pattern in enumerate(list(skip_patterns)):
-    skip_patterns[i] = re.compile(pattern)
+        node = (depend, deptask)
+        if node not in seen:
+            seen.add(node)
+            yield depend, deptask
 
-for depend in get_depends(requested):
-    if any(re.search(pattern, depend) for pattern in skip_patterns):
-        continue
-    print(depend)
+
+skip_patterns = [re.compile(pattern) for pattern in skip_patterns]
+for request in requested:
+    for recipe, task in get_tasks(request, 'do_build'):
+        if any(re.match(pattern, recipe) for pattern in skip_patterns):
+            continue
+
+        if task == 'do_populate_sysroot':
+            print(recipe)
