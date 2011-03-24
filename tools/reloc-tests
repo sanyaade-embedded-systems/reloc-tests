@@ -1,0 +1,327 @@
+#!/bin/bash
+#
+# This script tests every recipe to ensure it can be successfully built with
+# all of its dependencies built from a different path in the filesystem, to
+# catch relocation problems.
+
+
+abspath () {
+    local path=$1
+    if [[ -n ${path##/*} ]]; then
+        path=$PWD/$1
+    fi
+    echo $path
+}
+
+log () {
+    local logfile=$1
+    shift
+    if [[ $verbose -eq 1 ]]; then
+        eval "$@" 2>&1 | tee $logdir/$logfile.log
+    else
+        eval "$@" 2>&1 >$logdir/$logfile.log
+    fi
+}
+
+
+set -e
+set +m
+cleanup=:
+
+bindir=$(abspath ${0%/*})
+topdir=$PWD
+
+shortcircuit=0
+assumesstate=0
+verbose=0
+deftarget=poky-image-minimal
+dot_to_recipes="$bindir/dot-to-recipes"
+
+relocdir=$topdir/reloc-tests
+logdir=$relocdir/logs
+completedfile=$relocdir/completed
+sstate_dir=$relocdir/sstate-cache
+tmpdir=$relocdir/tmp
+
+
+main () {
+    process_arguments "$@"
+    dotfile=$relocdir/task-depends.dot.$target
+
+    trap "eval \$cleanup; echo" EXIT
+    mkdir -p $logdir
+
+    save_sstate
+    cleanup="$cleanup; restore_sstate"
+
+    prepare
+    setup_test
+
+    recipes=$(mktemp reloc-tests.XXXXXX) || \
+        die "Unable to create temporary file"
+    cleanup="$cleanup; rm -f $recipes"
+    $dot_to_recipes $dotfile $target >>$recipes
+    rm -f $dotfile
+
+    if [[ $verbose -eq 1 ]]; then
+        echo "Recipes to test:"
+        cat $recipes | sed -e's,^,  ,'
+    fi
+
+    recipecount=$(cat $recipes | wc -l)
+    recipenum=1
+    first=1
+    while read recipe; do
+        test_recipe $recipe $first $recipenum $recipecount
+        first=0
+        recipenum=$(($recipenum + 1))
+    done < $recipes
+}
+
+process_arguments () {
+    eval set -- $(getopt -n $(basename $0) -o l:t:hsav -l log-directory:,tmp-directory:,help,short-circuit,assume-sstate,verbose -- "$@")
+
+    while [[ $1 != '--' ]]; do
+        case $1 in
+            -l|--log-directory)
+                shift
+                logdir="$(abspath $1)"
+                ;;
+            -t|--tmp-directory)
+                shift
+                tmpdir="$(abspath $1)"
+                ;;
+            -s|--short-circuit)
+                shortcircuit=1
+                ;;
+            -a|--assume-sstate)
+                assumesstate=1
+                ;;
+            -v|--verbose)
+                echo "Verbose"
+                verbose=1
+                ;;
+            -h|--help)
+                usage
+                ;;
+        esac
+        shift
+    done
+    shift
+
+    if [[ $# -eq 0 ]]; then
+        target="$deftarget"
+    else
+        target="$1"
+    fi
+}
+
+usage () {
+    if [[ $# -gt 0 ]]; then
+        echo >&2 "$@"
+        echo >&2
+    fi
+    echo -e >&2 "Usage: $(basename $0) [options] [--] machine [target]"
+    echo -e >&2
+    echo -e >&2 "Default target: $deftarget"
+    echo -e >&2
+    echo -e >&2 'Options:'
+    echo -e >&2 '-h or --help\t\tShow this help information'
+    echo -e >&2 '-l or --log-directory\tSpecify path for all log files [default=[build directory]/logs]'
+    echo -e >&2 '-s or --short-circuit\tOnly test the specified recipes, not their dependences'
+    echo -e >&2 '-a or --assume-sstate\tAssume sstates are already available in [build directory]/sstate.safe -- do not populate it'
+    echo -e >&2 '-v or --verbose\tIncreased verbosity (show bitbake output)'
+
+    if [[ $# -gt 0 ]]; then
+        exit 2
+    else
+        exit 0
+    fi
+}
+
+save_sstate () {
+    if [[ -e $sstate_dir ]]; then
+        mv $sstate_dir $sstate_dir.orig
+    fi
+}
+
+restore_sstate () {
+    if [[ -e $sstate_dir.orig ]]; then
+        mv $sstate_dir.orig $sstate_dir
+    fi
+}
+
+# Prepare build directory 1, generating the dependency graph and populating
+# its sstate cache for all recipes, and moving build directory 1 so that
+# the files in its sysroot will not be available for builds in build directory
+# 2 to use
+prepare () {
+    if [[ -e $sstate_dir.populated ]]; then
+        mv $sstate_dir.populated $sstate_dir
+    fi
+    if [[ -e $tmpdir.populated ]]; then
+        rm -rf $tmpdir.populating
+        mv $tmpdir.populated $tmpdir.populating
+    fi
+
+    touch $topdir/conf/auto.conf
+    sed -i -e'/^TMPDIR *=/d;' $topdir/conf/auto.conf
+    sed -i -e'/^SSTATE_DIR *=/d;' $topdir/conf/auto.conf
+    echo "SSTATE_DIR = \"$sstate_dir\"" >> $topdir/conf/auto.conf
+    echo "TMPDIR = \"$tmpdir.populating\"" >> $topdir/conf/auto.conf
+
+    oldcleanup="$cleanup"
+    cleanup="if [ -e $sstate_dir ]; then mv $sstate_dir $sstate_dir.populated; fi; $cleanup"
+    (
+        set -e
+
+        echo -n "Generating dependency graph..."
+        log depgraph.$target bake -g $target || {
+            tail -n 30 $logdir/depgraph.$target.log
+            progress_end failed
+            exit 1
+        }
+        mv task-depends.dot $dotfile
+        rm -f depends.dot pn-depends.dot package-depends.dot
+        echo "done"
+
+        if [[ $assumesstate -eq 0 ]]; then
+            echo -n "Populating sstate cache..."
+            log populate-sstate.$target bake -k $target || {
+                progress_end failed
+                tail -n 30 $logdir/populate-sstate.$target.log
+                exit 1
+            }
+            echo "done"
+        else
+            echo "Skipped population of sstate cache"
+        fi
+
+        mv $tmpdir.populating $tmpdir.populated
+    )
+    cleanup="$oldcleanup"
+    if [[ -e $sstate_dir ]]; then
+        mv $sstate_dir $sstate_dir.populated
+    fi
+}
+
+progress_end () {
+    if [[ $verbose -eq 0 ]]; then
+        printf "%s\\n" "$@"
+    fi
+}
+
+# Setup build directory 2, where we'll be testing the recipes
+setup_test () {
+    rm -rf $sstate_dir
+    sed -i -e"s,^TMPDIR .*,TMPDIR = \"$tmpdir\"," $topdir/conf/auto.conf
+}
+
+die () {
+    echo >&2 "$@"
+    exit 1
+}
+
+# Test the build of a recipe with its dependencies sstate using a different
+# build path, to check for relocation issues.
+test_recipe () {
+    local recipe=$1
+    local first=$2
+    local recipenum=$3
+    local recipecount=$4
+
+    if [[ $first -eq 1 ]] || grep -qx "$recipe" $completedfile 2>/dev/null || \
+       [[ $shortcircuit -eq 1 && $recipe != $target ]]; then
+        state=Skipping
+    else
+        state=Testing
+    fi
+    progress $recipe $state $recipenum $recipecount
+    if false; then
+        if [[ "$state" = "Testing" ]]; then
+            logfile=$logdir/incomplete.$recipe.log
+            ret=0
+            log $logfile build $recipe || ret=$?
+            if [[ $ret -eq 0 ]]; then
+                mv $logfile $logdir/succeeded.$recipe.log
+                echo $recipe >> $completedfile
+                state=Completed
+            else
+                mv $logfile $logdir/failed.$recipe.log
+                state=Failed
+            fi
+        else
+            state=Skipped
+        fi
+        copy_sstate $recipe $topdir/$sstate_dir.populated $topdir/$sstate_dir
+        progress $recipe $state $recipenum $recipecount
+    fi
+    if [[ $recipenum -eq $recipecount ]]; then
+        echo
+    fi
+}
+
+# Show progress bar
+progress () {
+    local recipe=$1
+    local state=$2
+    local recipenum=$3
+    local recipecount=$4
+
+    if [[ $verbose -eq 0 ]]; then
+        percent=$(($recipenum * 100 / $recipecount))
+        printf "%-30s %3.1d%% [%d/%d]%10s\\r" "$state $recipe" $percent $recipenum $recipecount " "
+    fi
+}
+
+# Build, then clean a recipe
+build () {
+    bake $1 || return $?
+    bake -c clean $1 || true
+    ## Remove the sstate package we just generated, in case its signature differs
+    #/bin/ls $sstate_dir/sstate-$1-*|grep -Ev "sstate-$1-(native(|sdk)|cross(|sdk)|sdk)"|while read fn; do
+    #    rm -f "$fn"
+    #done
+}
+
+# Run bitbake, handling ^C
+bake () {
+    intr=0
+    local ret=0
+
+    trap "kill %-; intr=1" INT
+    if [[ $verbose -eq 1 ]]; then
+        bitbake "$@" &
+    else
+        bitbake "$@" </dev/null &
+    fi
+    wait %- || ret=$?
+    if [[ $intr -eq 1 ]]; then
+        echo Interrupted.
+        exit $ret
+    fi
+    trap - INT
+    return $ret
+}
+
+# Copy the sstate(s) for the specific pkg, from the specified source
+# sstate directory to the specified destination sstate directory
+copy_sstate () {
+    local pkg=$1
+    local from=$2
+    local to=$3
+
+    mkdir -p $to
+    for pkg in $from/sstate-$pkg-*; do
+        if [[ -e $pkg ]]; then
+            ln 2>/dev/null $from/sstate-$pkg-* $to/ || \
+                cp -f $from/sstate-$pkg-* $to/
+        fi
+    done
+    for postfix in $postfixes; do
+        rm -f $to/sstate-$pkg-$postfix-*
+    done
+}
+
+
+main "$@"
