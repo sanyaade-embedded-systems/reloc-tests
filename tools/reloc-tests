@@ -238,9 +238,8 @@ test_recipe () {
     fi
     progress $recipe $state $recipenum $recipecount
     if [[ "$state" = "Testing" ]]; then
-        logfile=$logdir/incomplete.$recipe.log
         ret=0
-        log $logfile build $recipe || ret=$?
+        log incomplete.$recipe.log build $recipe || ret=$?
         if [[ $ret -eq 0 ]]; then
             mv $logfile $logdir/succeeded.$recipe.log
             echo $recipe >> $completedfile
