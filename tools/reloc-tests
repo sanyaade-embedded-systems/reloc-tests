@@ -57,7 +57,7 @@ main () {
     prepare
     setup_test
 
-    recipes=$(mktemp reloc-tests.XXXXXX) || \
+    recipes=$(mktemp $relocdir/recipes.XXXXXX) || \
         die "Unable to create temporary file"
     cleanup="$cleanup; rm -f $recipes"
     $dot_to_recipes $dotfile $target >>$recipes
