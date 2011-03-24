@@ -251,7 +251,7 @@ test_recipe () {
     else
         state=Skipped
     fi
-    copy_sstate $recipe $topdir/$sstate_dir.populated $topdir/$sstate_dir
+    copy_sstate $recipe $sstate_dir.populated $sstate_dir
     progress $recipe $state $recipenum $recipecount
     if [[ $recipenum -eq $recipecount ]]; then
         echo
