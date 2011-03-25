@@ -27,21 +27,25 @@ for line in dotfile:
 
 seen = set()
 def get_tasks(target, task):
-    for depend, deptask in depends[target][task]:
-        for depend_, deptask_ in get_tasks(depend, deptask):
+    for node in depends[target][task]:
+        if node in seen:
+            continue
+
+        recipe, deptask = node
+        for depend_, deptask_ in get_tasks(recipe, deptask):
             yield depend_, deptask_
 
-        node = (depend, deptask)
-        if node not in seen:
-            seen.add(node)
-            yield depend, deptask
+        if deptask != 'do_populate_sysroot':
+            continue
+
+        seen.add(node)
+        yield recipe, deptask
 
 
 skip_patterns = [re.compile(pattern) for pattern in skip_patterns]
 for request in requested:
     for recipe, task in get_tasks(request, 'do_build'):
-        if any(re.match(pattern, recipe) for pattern in skip_patterns):
+        if any(re.search(pattern, recipe) for pattern in skip_patterns):
             continue
 
-        if task == 'do_populate_sysroot':
-            print(recipe)
+        print(recipe)
