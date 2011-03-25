@@ -10,13 +10,13 @@ Implementation details:
 2. Generates .dot graphs leading to that recipe.
 3. Uses the .dot to produce a linearized list of recipes.
 4. Set aside the populated sstate and tmp directories for later use.
-5. Iterate over this list of recipes, for each, using a different tmp
-   directory than was used to pre-populate:
+5. Using a different tmp directory than was used for the pre-population,
+   iterate over this list of recipes.  For each recipe:
 
- 1. Bake the recipe
- 2. Clean the recipe
- 3. Copy over the pre-populated sstate package(s) for this recipe,
-    overwriting any which were produced in this build.
+   1. Bake the recipe
+   2. Clean the recipe
+   3. Copy over the pre-populated sstate package(s) for this recipe,
+      overwriting any which were produced in this build.
 
 In this way, we ensure that we test a build of each recipe, with its
 dependencies prebuilt from a different tmp directory, catching any relocation
