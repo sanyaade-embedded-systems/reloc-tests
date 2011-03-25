@@ -95,7 +95,6 @@ process_arguments () {
                 assumesstate=1
                 ;;
             -v|--verbose)
-                echo "Verbose"
                 verbose=1
                 ;;
             -h|--help)
