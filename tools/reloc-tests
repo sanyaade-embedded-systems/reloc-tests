@@ -57,15 +57,12 @@ main () {
     prepare
     setup_test
 
-    recipes=$(mktemp $outputdir/recipes.XXXXXX) || \
-        die "Unable to create temporary file"
-    cleanup="$cleanup; rm -f $recipes"
-    $dot_to_recipes $dotfile $target >>$recipes
+    $dot_to_recipes $dotfile $target >$outputdir/recipes.$target
     rm -f $dotfile
 
     if [[ $verbose -eq 1 ]]; then
         echo "Recipes to test:"
-        cat $recipes | sed -e's,^,  ,'
+        cat $outputdir/recipes.$target | sed -e's,^,  ,'
     fi
 
     recipecount=$(cat $recipes | wc -l)
@@ -75,7 +72,7 @@ main () {
         test_recipe $recipe $first $recipenum $recipecount
         first=0
         recipenum=$(($recipenum + 1))
-    done < $recipes
+    done < $outputdir/recipes.$target
 }
 
 process_arguments () {
