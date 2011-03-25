@@ -37,16 +37,16 @@ verbose=0
 deftarget=poky-image-minimal
 dot_to_recipes="$bindir/dot-to-recipes"
 
-relocdir=$topdir/reloc-tests
-logdir=$relocdir/logs
-completedfile=$relocdir/completed
-sstate_dir=$relocdir/sstate-cache
-tmpdir=$relocdir/tmp
+outputdir=$topdir/build
+logdir=$outputdir/logs
+completedfile=$outputdir/completed
+sstate_dir=$outputdir/sstate-cache
+tmpdir=$outputdir/tmp
 
 
 main () {
     process_arguments "$@"
-    dotfile=$relocdir/task-depends.dot.$target
+    dotfile=$outputdir/task-depends.dot.$target
 
     trap "eval \$cleanup; echo" EXIT
     mkdir -p $logdir
@@ -57,7 +57,7 @@ main () {
     prepare
     setup_test
 
-    recipes=$(mktemp $relocdir/recipes.XXXXXX) || \
+    recipes=$(mktemp $outputdir/recipes.XXXXXX) || \
         die "Unable to create temporary file"
     cleanup="$cleanup; rm -f $recipes"
     $dot_to_recipes $dotfile $target >>$recipes
