@@ -307,13 +307,21 @@ copy_sstate () {
 
     mkdir -p $to
     for sstate_pkg in $from/sstate-$pkg-*; do
+        postfixed=0
+        for postfix in $postfixes; do
+            if echo "$sstate_pkg" | grep -q "^$from/sstate-$pkg-$postfix-"; then
+                postfixed=1
+            fi
+        done
+        if [[ $postfixed -eq 1 ]]; then
+            info "Skipping copy of $sstate_pkg due to postfix"
+            continue
+        fi
+
         if [[ -e $pkg ]]; then
             ln 2>/dev/null $sstate_pkg $to/ || \
                 cp -f $sstate_$pkg $to/
         fi
-    done
-    for postfix in $postfixes; do
-        rm -f $to/sstate-$pkg-$postfix-*
     done
 }
 
