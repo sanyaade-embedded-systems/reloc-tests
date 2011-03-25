@@ -2,7 +2,8 @@ This script was written by Chris Larson, and is under Mentor Graphics
 Corporation's copyright.  It is used to check for relocation issues in
 prebuilt binaries (originally packaged-staging, now sstate).
 
-Implementation:
+Implementation details:
+-----------------------
 
 1. Pre-populates all the sstate packages leading up to the recipe you request
    on the command-line.
@@ -12,10 +13,10 @@ Implementation:
 4. Iterate over this list of recipes, for each, using a different tmp
    directory than was used to pre-populate:
 
-    1. Bake the recipe
-    2. Clean the recipe
-    3. Copy over the pre-populated sstate package(s) for this recipe,
-       overwriting any which were produced in this build.
+  1. Bake the recipe
+  2. Clean the recipe
+  3. Copy over the pre-populated sstate package(s) for this recipe,
+      overwriting any which were produced in this build.
 
 In this way, we ensure that we test a build of each recipe, with its
 dependencies prebuilt from a different tmp directory, catching any relocation
