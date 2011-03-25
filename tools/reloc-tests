@@ -49,7 +49,7 @@ main () {
     dotfile=$outputdir/task-depends.dot.$target
 
     trap "eval \$cleanup; echo" EXIT
-    mkdir -p $logdir
+    mkdir -p $logdir/results
 
     save_sstate
     cleanup="$cleanup; restore_sstate"
@@ -241,11 +241,11 @@ test_recipe () {
         ret=0
         log incomplete.$recipe build $recipe || ret=$?
         if [[ $ret -eq 0 ]]; then
-            mv $logdir/incomplete.$recipe.log $logdir/succeeded.$recipe.log
+            mv $logdir/incomplete.$recipe.log $logdir/results/succeeded.$recipe.log
             echo $recipe >> $completedfile
             state=Completed
         else
-            mv $logdir/incomplete.$recipe.log $logdir/failed.$recipe.log
+            mv $logdir/incomplete.$recipe.log $logdir/results/failed.$recipe.log
             state=Failed
         fi
     else
