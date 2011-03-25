@@ -309,10 +309,10 @@ copy_sstate () {
     local to=$3
 
     mkdir -p $to
-    for pkg in $from/sstate-$pkg-*; do
+    for sstate_pkg in $from/sstate-$pkg-*; do
         if [[ -e $pkg ]]; then
-            ln 2>/dev/null $from/sstate-$pkg-* $to/ || \
-                cp -f $from/sstate-$pkg-* $to/
+            ln 2>/dev/null $sstate_pkg $to/ || \
+                cp -f $sstate_$pkg $to/
         fi
     done
     for postfix in $postfixes; do
