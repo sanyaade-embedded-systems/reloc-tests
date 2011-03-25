@@ -47,9 +47,10 @@ tmpdir=$outputdir/tmp
 main () {
     process_arguments "$@"
     dotfile=$outputdir/task-depends.dot.$target
+    recipefile=$outputdir/recipes.$target
 
     trap "eval \$cleanup; echo" EXIT
-    mkdir -p $logdir/results
+    mkdir -p $outputdir $logdir/results
 
     save_sstate
     cleanup="$cleanup; restore_sstate"
@@ -57,22 +58,22 @@ main () {
     prepare
     setup_test
 
-    $dot_to_recipes $dotfile $target >$outputdir/recipes.$target
+    $dot_to_recipes $dotfile $target >$recipefile
     rm -f $dotfile
 
     if [[ $verbose -eq 1 ]]; then
         echo "Recipes to test:"
-        cat $outputdir/recipes.$target | sed -e's,^,  ,'
+        cat $recipefile | sed -e's,^,  ,'
     fi
 
-    recipecount=$(cat $recipes | wc -l)
+    recipecount=$(cat $recipefile | wc -l)
     recipenum=1
     first=1
     while read recipe; do
         test_recipe $recipe $first $recipenum $recipecount
         first=0
         recipenum=$(($recipenum + 1))
-    done < $outputdir/recipes.$target
+    done < $recipefile
 }
 
 process_arguments () {
