@@ -13,13 +13,27 @@ abspath () {
     echo $path
 }
 
-log () {
-    local logfile=$1
+run () {
+    local msg="$1"
     shift
+    local logfile="$1"
+    shift
+
     if [[ $verbose -eq 1 ]]; then
-        eval "$@" 2>&1 | tee $logdir/$logfile.log
+        echo >&2 "$msg"
+        eval "$@" 2>&1 | tee $logdir/$logfile.log || {
+            echo >&2 "Error running $@:"
+            tail -n 30 $logdir/$logfile.log >&2
+            return 1
+        }
     else
-        eval "$@" 2>&1 >$logdir/$logfile.log
+        printf >&2 "$msg..."
+        eval "$@" 2>&1 >$logdir/$logfile.log || {
+            printf >&2 "ERROR:\n"
+            tail -n 30 $logdir/$logfile.log >&2
+            return 1
+        }
+        printf >&2 "done\n"
     fi
 }
 
@@ -40,6 +54,7 @@ dot_to_recipes="$bindir/dot-to-recipes"
 outputdir=$topdir/build
 logdir=$outputdir/logs
 completedfile=$outputdir/completed
+excludefile=$outputdir/excluded
 sstate_dir=$outputdir/sstate-cache
 tmpdir=$outputdir/tmp
 
@@ -55,11 +70,15 @@ main () {
     save_sstate
     cleanup="$cleanup; restore_sstate"
 
+    setup_excludes
+    cat $excludefile >$recipefile
+    list_recipe_depends "$target" | while read recipe; do
+        if ! grep -qx "$recipe" $recipefile; then
+            echo $recipe
+        fi
+    done >>$recipefile
     prepare
     setup_test
-
-    $dot_to_recipes $dotfile $target >$recipefile
-    rm -f $dotfile
 
     if [[ $verbose -eq 1 ]]; then
         echo "Recipes to test:"
@@ -73,7 +92,7 @@ main () {
         test_recipe $recipe $first $recipenum $recipecount
         first=0
         recipenum=$(($recipenum + 1))
-    done < $recipefile
+    done <$recipefile
 }
 
 process_arguments () {
@@ -148,12 +167,35 @@ restore_sstate () {
     fi
 }
 
+setup_excludes () {
+    # The wrapper script builds pseudo-native before anything else.  As a
+    # result, we can't really test anything in that particular dependency
+    # chain.  So generate a list of recipes for it and exclude those.
+    list_recipe_depends pseudo-native >$excludefile
+}
+
+list_recipe_depends () {
+    local target=$1
+    local outdir=$(mktemp -d recipes.$target.XXXXXX)
+    cd $outdir
+
+    cleanup="rm -rf $outdir; $cleanup"
+    run >&2 "Generating dependency graph for $target" depgraph.$target \
+            bitbake -g $target
+    $dot_to_recipes task-depends.dot $target
+    cd - >/dev/null
+    rm -rf $outdir
+}
+
 # Prepare build directory 1, generating the dependency graph and populating
 # its sstate cache for all recipes, and moving build directory 1 so that
 # the files in its sysroot will not be available for builds in build directory
 # 2 to use
 prepare () {
     if [[ -e $sstate_dir.populated ]]; then
+        if [[ -e $sstate_dir ]]; then
+            rmdir $sstate_dir
+        fi
         mv $sstate_dir.populated $sstate_dir
     fi
     if [[ -e $tmpdir.populated ]]; then
@@ -172,24 +214,9 @@ prepare () {
     (
         set -e
 
-        echo -n "Generating dependency graph..."
-        log depgraph.$target bake -g $target || {
-            tail -n 30 $logdir/depgraph.$target.log
-            progress_end failed
-            exit 1
-        }
-        mv task-depends.dot $dotfile
-        rm -f depends.dot pn-depends.dot package-depends.dot
-        echo "done"
-
         if [[ $assumesstate -eq 0 ]]; then
-            echo -n "Populating sstate cache..."
-            log populate-sstate.$target bake -k $target || {
-                progress_end failed
-                tail -n 30 $logdir/populate-sstate.$target.log
-                exit 1
-            }
-            echo "done"
+            run "Populating sstate cache" populate-sstate.$target \
+                bake -c populate_sysroot $target
         else
             echo "Skipped population of sstate cache"
         fi
@@ -199,12 +226,6 @@ prepare () {
     cleanup="$oldcleanup"
     if [[ -e $sstate_dir ]]; then
         mv $sstate_dir $sstate_dir.populated
-    fi
-}
-
-progress_end () {
-    if [[ $verbose -eq 0 ]]; then
-        printf "%s\\n" "$@"
     fi
 }
 
@@ -227,8 +248,10 @@ test_recipe () {
     local recipenum=$3
     local recipecount=$4
 
-    if [[ $first -eq 1 ]] || grep -qx "$recipe" $completedfile 2>/dev/null || \
-       [[ $shortcircuit -eq 1 && $recipe != $target ]]; then
+    if grep -qx "$recipe" $excludefile; then
+        state=Excluded
+    elif [[ $first -eq 1 ]] || grep -qx "$recipe" $completedfile 2>/dev/null || \
+         [[ $shortcircuit -eq 1 && $recipe != $target ]]; then
         state=Skipping
     else
         state=Testing
@@ -245,7 +268,7 @@ test_recipe () {
             mv $logdir/incomplete.$recipe.log $logdir/results/failed.$recipe.log
             state=Failed
         fi
-    else
+    elif [[ "$state" != "Excluded" ]]; then
         state=Skipped
     fi
     copy_sstate $recipe $sstate_dir.populated $sstate_dir
@@ -265,17 +288,24 @@ progress () {
     if [[ $verbose -eq 0 ]]; then
         percent=$(($recipenum * 100 / $recipecount))
         printf "%-30s %3.1d%% [%d/%d]%10s\\r" "$state $recipe" $percent $recipenum $recipecount " "
+    else
+        echo "$recipe: $state"
     fi
 }
 
-# Build, then clean a recipe
+log () {
+    local logfile=$1
+    shift
+    if [[ $verbose -eq 1 ]]; then
+        eval "$@" 2>&1 | tee $logdir/$logfile.log
+    else
+        eval "$@" 2>&1 >$logdir/$logfile.log
+    fi
+}
+
 build () {
     bake $1 || return $?
     bake -c clean $1 || true
-    ## Remove the sstate package we just generated, in case its signature differs
-    #/bin/ls $sstate_dir/sstate-$1-*|grep -Ev "sstate-$1-(native(|sdk)|cross(|sdk)|sdk)"|while read fn; do
-    #    rm -f "$fn"
-    #done
 }
 
 # Run bitbake, handling ^C
@@ -307,6 +337,10 @@ copy_sstate () {
 
     mkdir -p $to
     for sstate_pkg in $from/sstate-$pkg-*; do
+        if [[ ! -e $sstate_pkg ]] || [[ -e $to/${sstate_pkg##*/} ]]; then
+            continue
+        fi
+
         postfixed=0
         for postfix in $postfixes; do
             if echo "$sstate_pkg" | grep -q "^$from/sstate-$pkg-$postfix-"; then
@@ -318,11 +352,16 @@ copy_sstate () {
             continue
         fi
 
-        if [[ -e $pkg ]]; then
-            ln 2>/dev/null $sstate_pkg $to/ || \
-                cp -f $sstate_$pkg $to/
-        fi
+        info "Copying $sstate_pkg to $to"
+        ln 2>/dev/null $sstate_pkg $to/ || \
+            cp -f $sstate_pkg $to/
     done
+}
+
+info () {
+    if [[ $verbose -eq 1 ]]; then
+        echo >&2 "$@"
+    fi
 }
 
 
