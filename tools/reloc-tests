@@ -216,7 +216,7 @@ prepare () {
 
         if [[ $assumesstate -eq 0 ]]; then
             run "Populating sstate cache" populate-sstate.$target \
-                bake -c populate_sysroot $target
+                bake $target
         else
             echo "Skipped population of sstate cache"
         fi
@@ -304,7 +304,7 @@ log () {
 }
 
 build () {
-    bake $1 || return $?
+    bake -c populate_sysroot $1 || return $?
     bake -c clean $1 || true
 }
 
