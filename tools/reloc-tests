@@ -49,6 +49,7 @@ shortcircuit=0
 assumesstate=0
 verbose=0
 deftarget=poky-image-minimal
+postfixes="-native -nativesdk -cross -crosssdk -sdk"
 dot_to_recipes="$bindir/dot-to-recipes"
 
 outputdir=$topdir/build
@@ -248,6 +249,11 @@ test_recipe () {
     local recipenum=$3
     local recipecount=$4
 
+    if [[ -z $(get_sstate_pkgs $recipe $sstate_dir.populated) ]]; then
+        echo >&2 "Error: no pre-populated sstate packages found for $recipe"
+        return 1
+    fi
+
     if grep -qx "$recipe" $excludefile; then
         state=Excluded
     elif [[ $first -eq 1 ]] || grep -qx "$recipe" $completedfile 2>/dev/null || \
@@ -261,7 +267,19 @@ test_recipe () {
         ret=0
         log incomplete.$recipe build $recipe || ret=$?
         if [[ $ret -eq 0 ]]; then
-            mv $logdir/incomplete.$recipe.log $logdir/results/succeeded.$recipe.log
+            rebuilt=0
+            for sstate_pkg in $(get_sstate_pkgs $recipe $sstate_dir); do
+                base=$(basename $sstate_pkg)
+                if [[ ! -e $sstate_dir.populated/$base ]]; then
+                    echo >&2 "Warning: signature changed for $recipe"
+                    rebuilt=1
+                fi
+            done
+            if [[ $rebuilt -eq 0 ]]; then
+                mv $logdir/incomplete.$recipe.log $logdir/results/succeeded.$recipe.log
+            else
+                mv $logdir/incomplete.$recipe.log $logdir/results/rebuilt.$recipe.log
+            fi
             echo $recipe >> $completedfile
             state=Completed
         else
@@ -328,6 +346,28 @@ bake () {
     return $ret
 }
 
+get_sstate_pkgs () {
+    local pkg=$1
+    local dir=$2
+    for sstate_pkg in $dir/sstate-$pkg-*; do
+        if [[ ! -e $sstate_pkg ]] || [[ -e $to/${sstate_pkg##*/} ]]; then
+            continue
+        fi
+
+        postfixed=0
+        for postfix in $postfixes; do
+            if echo "$sstate_pkg" | grep -q "^$dir/sstate-$pkg-$postfix-"; then
+                postfixed=1
+            fi
+        done
+        if [[ $postfixed -eq 1 ]]; then
+            continue
+        fi
+
+        echo $sstate_pkg
+    done
+}
+
 # Copy the sstate(s) for the specific pkg, from the specified source
 # sstate directory to the specified destination sstate directory
 copy_sstate () {
@@ -336,22 +376,7 @@ copy_sstate () {
     local to=$3
 
     mkdir -p $to
-    for sstate_pkg in $from/sstate-$pkg-*; do
-        if [[ ! -e $sstate_pkg ]] || [[ -e $to/${sstate_pkg##*/} ]]; then
-            continue
-        fi
-
-        postfixed=0
-        for postfix in $postfixes; do
-            if echo "$sstate_pkg" | grep -q "^$from/sstate-$pkg-$postfix-"; then
-                postfixed=1
-            fi
-        done
-        if [[ $postfixed -eq 1 ]]; then
-            info "Skipping copy of $sstate_pkg due to postfix"
-            continue
-        fi
-
+    get_sstate_pkgs $pkg $from | while read sstate_pkg; do
         info "Copying $sstate_pkg to $to"
         ln 2>/dev/null $sstate_pkg $to/ || \
             cp -f $sstate_pkg $to/
