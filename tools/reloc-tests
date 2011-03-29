@@ -48,7 +48,7 @@ topdir=$PWD
 shortcircuit=0
 assumesstate=0
 verbose=0
-deftarget=poky-image-minimal
+deftarget=core-image-minimal
 postfixes="-native -nativesdk -cross -crosssdk -sdk"
 dot_to_recipes="$bindir/dot-to-recipes"
 
