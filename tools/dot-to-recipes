@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 
 import re
-import os
 import sys
-import collections
+import dot
 
 skip_patterns = ["^task-", "^meta-", "-image$", "-image-"]
-regex = re.compile(r'"(?P<name>[^"]+)" \[label="(?P<label>[^"]+)"\]')
 
 try:
     dotfile = sys.argv[1]
@@ -14,38 +12,17 @@ try:
 except IndexError:
     sys.exit("Usage: dot-to-recipes.py DOTFILE TARGET [TARGET...]")
 
-depends = collections.defaultdict(lambda: collections.defaultdict(set))
-dotfile = open(dotfile, "rU")
-for line in dotfile:
-    match = re.match(regex, line)
-    if not match:
-        if " -> " in line:
-            src, dest = line.rstrip().replace('"', '').split(" -> ")
-            srcrecipe, srctask = src.rsplit(".", 1)
-            destrecipe, desttask = dest.rsplit(".", 1)
-            depends[srcrecipe][srctask].add((destrecipe, desttask))
-
-seen = set()
-def get_tasks(target, task):
-    for node in depends[target][task]:
-        if node in seen:
-            continue
-
-        recipe, deptask = node
-        for depend_, deptask_ in get_tasks(recipe, deptask):
-            yield depend_, deptask_
-
-        if deptask != 'do_populate_sysroot':
-            continue
-
-        seen.add(node)
-        yield recipe, deptask
-
-
+depends = dot.parse_depends(dotfile)
+seen_recipes = set()
 skip_patterns = [re.compile(pattern) for pattern in skip_patterns]
 for request in requested:
-    for recipe, task in get_tasks(request, 'do_build'):
+    for node in dot.get_all_depends(depends, '%s.do_build' % request):
+        recipe, task = node.rsplit(".", 1)
+        if recipe in seen_recipes or task != 'do_populate_sysroot':
+            continue
+
         if any(re.search(pattern, recipe) for pattern in skip_patterns):
             continue
 
+        seen_recipes.add(recipe)
         print(recipe)
