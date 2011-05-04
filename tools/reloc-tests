@@ -217,7 +217,7 @@ prepare () {
 
         if [[ $assumesstate -eq 0 ]]; then
             run "Populating sstate cache" populate-sstate.$target \
-                bake $target
+                bake -k $target
         else
             echo "Skipped population of sstate cache"
         fi
